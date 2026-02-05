@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Yahboom Controller</title>
+    <style>
+        body { margin: 0; padding: 0; background-color: #000; color: #0f0; font-family: monospace; overflow: hidden; }
+        
+        .main-container { display: flex; height: 60vh; width: 100vw; border-bottom: 2px solid #333; }
+        .camera-box { flex: 1; border-right: 1px solid #333; position: relative; background: #111; }
+        img { width: 100%; height: 100%; object-fit: contain; }
+        
+        .map-box { flex: 1; background: #050505; position: relative; display: flex; justify-content: center; align-items: center; }
+        canvas { background: #000; border: 1px solid #333; }
+        
+        .control-panel { 
+            height: 40vh; background: #111; position: relative; width: 100%;
+        }
+        
+        #stick-left {
+            position: absolute; bottom: 40px; left: 40px;
+            width: 120px; height: 120px;
+            background: rgba(255,255,255,0.05); border: 2px dashed #444; border-radius: 50%; z-index: 10;
+        }
+
+        #stick-right {
+            position: absolute; bottom: 40px; right: 40px;
+            width: 120px; height: 120px;
+            background: rgba(255,255,255,0.05); border: 2px dashed #444; border-radius: 50%; z-index: 10;
+        }
+        
+        .center-btn { 
+            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+            display: flex; flex-direction: column; gap: 10px; width: 200px; text-align: center; z-index: 5;
+        }
+        
+        button { padding: 12px; background: #003300; color: #0f0; border: 2px solid #0f0; font-weight: bold; cursor: pointer; border-radius: 8px; width: 100%; font-size: 14px; }
+        button:active { transform: scale(0.95); }
+        .btn-ai-on { background: #00ff00; color: #000; box-shadow: 0 0 15px #0f0; }
+        .btn-ai-off { background: #003300; color: #0f0; }
+        .stop-btn { border-color: red; color: red; background: #300; }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/nipplejs/0.9.0/nipplejs.min.js"></script>
+</head>
+<body>
+    <div class="main-container">
+        <div class="camera-box">
+            <img src="{{ url_for('video_feed') }}">
+            <div style="position:absolute; top:10px; left:10px; background:rgba(0,0,0,0.6); padding:4px;" id="ai-status">AI: OFF</div>
+        </div>
+        <div class="map-box">
+            <div style="position:absolute; top:10px; right:10px;">LIVE MAP</div>
+            <canvas id="worldCanvas" width="400" height="400"></canvas>
+        </div>
+    </div>
+
+    <div class="control-panel">
+        <div id="stick-left"></div>
+        <div id="stick-right"></div>
+        <div class="center-btn">
+            <button onclick="toggleAuto()">🤖 AUTO EXPLORE</button>
+            <button onclick="toggleAi()" id="btn-ai" class="btn-ai-off">👁️ AI VISION: OFF</button>
+            <button onclick="stopRobot()" class="stop-btn">🛑 STOP</button>
+            <button onclick="clearMap()" style="border-color:#555; color:#aaa; background:#222;">🗑️ RESET MAP</button>
+        </div>
+    </div>
+
+    <script>
+        const socket = io({ reconnection: true });
+        const canvas = document.getElementById('worldCanvas');
+        const ctx = canvas.getContext('2d');
+        const btnAi = document.getElementById('btn-ai');
+        const aiStatusLabel = document.getElementById('ai-status');
+        
+        let centerX = canvas.width / 2; let centerY = canvas.height / 2; let scale = 1.0; 
+        let robot = { x: 0, y: 0, theta: 90 };
+        let points = []; let trail = [];
+
+        // 🚀 [핵심] 전송 속도 제한 변수 (Throttling)
+        let lastLeftTime = 0;
+        let lastRightTime = 0;
+        const SEND_INTERVAL = 100; // 100ms (0.1초) 간격으로만 전송
+
+        function drawWorld() {
+            const padding = 50;
+            let maxCoord = Math.max(Math.abs(robot.x), Math.abs(robot.y)) * scale;
+            if (maxCoord > (canvas.width / 2) - padding) scale *= 0.98;
+
+            ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.strokeStyle = '#222'; ctx.lineWidth = 1; ctx.beginPath();
+            let g = 50 * scale;
+            for(let i=0; i<canvas.width; i+=g) { ctx.moveTo(i,0); ctx.lineTo(i,canvas.height); }
+            for(let i=0; i<canvas.height; i+=g) { ctx.moveTo(0,i); ctx.lineTo(canvas.width,i); }
+            ctx.stroke();
+
+            if (trail.length > 1) {
+                ctx.beginPath(); ctx.strokeStyle = '#555'; ctx.lineWidth = 2;
+                ctx.moveTo(centerX + (trail[0].x * scale), centerY - (trail[0].y * scale));
+                for (let i = 1; i < trail.length; i++) ctx.lineTo(centerX + (trail[i].x * scale), centerY - (trail[i].y * scale));
+                ctx.stroke();
+            }
+
+            ctx.fillStyle = '#ff0000';
+            points.forEach(p => ctx.fillRect(centerX + (p.x * scale), centerY - (p.y * scale), 3, 3));
+
+            ctx.save();
+            ctx.translate(centerX + (robot.x * scale), centerY - (robot.y * scale));
+            ctx.rotate((90 - robot.theta) * Math.PI / 180);
+            ctx.beginPath(); ctx.moveTo(0, -10); ctx.lineTo(-8, 10); ctx.lineTo(8, 10); ctx.closePath();
+            ctx.fillStyle = '#00ff00'; ctx.fill();
+            ctx.restore();
+        }
+        setInterval(drawWorld, 50);
+
+        socket.on('map_update', (data) => {
+            if(data.robot) { robot = data.robot; trail.push({x: robot.x, y: robot.y}); if(trail.length > 2000) trail.shift(); }
+            if(data.obstacle) points.push(data.obstacle);
+        });
+
+        socket.on('ai_state', (data) => {
+            if (data.enabled) {
+                btnAi.innerText = "👁️ AI VISION: ON"; btnAi.className = "btn-ai-on"; aiStatusLabel.innerText = "AI: ON";
+            } else {
+                btnAi.innerText = "👁️ AI VISION: OFF"; btnAi.className = "btn-ai-off"; aiStatusLabel.innerText = "AI: OFF";
+            }
+        });
+
+        function toggleAuto() { socket.emit('toggle_auto_drive'); }
+        function stopRobot() { socket.emit('car_stop'); }
+        function toggleAi() { socket.emit('toggle_ai'); }
+        function clearMap() { socket.emit('reset_map'); points = []; trail = []; robot = {x:0, y:0, theta:90}; scale=1.0; }
+
+        const opt = { mode: 'static', position: { left: '50%', top: '50%' }, size: 80, color: 'white' };
+        
+        // 왼쪽 (자동차) - 속도 제한 적용
+        const leftStick = nipplejs.create({ zone: document.getElementById('stick-left'), ...opt });
+        leftStick.on('move', (e, d) => {
+            const now = Date.now();
+            if (d.vector && (now - lastLeftTime > SEND_INTERVAL)) {
+                socket.emit('car_control', {x: d.vector.x, y: d.vector.y});
+                lastLeftTime = now;
+            }
+        });
+        leftStick.on('end', () => socket.emit('car_stop'));
+
+        // 오른쪽 (카메라) - 속도 제한 적용
+        const rightStick = nipplejs.create({ zone: document.getElementById('stick-right'), ...opt });
+        rightStick.on('move', (e, d) => {
+            const now = Date.now();
+            if (d.vector && (now - lastRightTime > SEND_INTERVAL)) {
+                socket.emit('cam_control', {x: d.vector.x, y: d.vector.y});
+                lastRightTime = now;
+            }
+        });
+    </script>
+</body>
+</html>

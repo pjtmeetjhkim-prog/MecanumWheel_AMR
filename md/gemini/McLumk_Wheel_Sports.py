@@ -149,7 +149,7 @@ class McLumk_Sports():
             self.bot.Ctrl_Car(2, 0, 0)
             self.bot.Ctrl_Car(3, 0, 0)
 
-    def set_deflection(speed, deflection):
+    def set_deflection(self, speed, deflection):
         """
             90
         180--丨--0
@@ -166,7 +166,7 @@ class McLumk_Sports():
         r2 = int(vy + vx)
         return l1,l2,r1,r2
 
-    def set_deflection_rate(speed, deflection,rate):
+    def set_deflection_rate(self, speed, deflection, rate):
         """
             90
         180--丨--0
