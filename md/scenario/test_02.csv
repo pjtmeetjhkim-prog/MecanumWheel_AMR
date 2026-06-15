@@ -1,0 +1,15 @@
+no,action,time,distance,pwm
+1,sleep,0.3,,
+2,front,1.5,,80
+3,sleep,0.5,,
+4,right,1.0,,80
+5,sleep,1.0,,
+6,front,1.0,,80
+7,left,1.0,,80
+8,sleep,1.0,,
+9,front,1.0,,80
+10,sleep,1.0,,
+11,rotatel,1.0,,80
+12,front,3.5,,80
+13,sleep,0.5,,
+14,end,,,
