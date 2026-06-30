@@ -14,6 +14,7 @@ NDJSON(JSON 1줄 + \\n) 메시지를 보내면 됩니다.
 from __future__ import annotations
 
 import argparse
+import datetime
 import importlib.util
 import math
 import os, sys, time
@@ -120,6 +121,17 @@ class DefaultRaspbotHandler(RaspbotCommandHandler):
         # 이전 명령 캐싱 (중복 요청 무시용)
         self._last_move_params = None
         self._last_motor_state = None
+
+        # ── 명령 로그 파일 초기화 ──────────────────────────────────────────
+        # 실행 시각을 파일명에 포함: logs/log_YYYYMMDD_HHMMSS.txt
+        _start_ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        _log_dir  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+        os.makedirs(_log_dir, exist_ok=True)   # logs/ 폴더 없으면 자동 생성
+        self._log_path = os.path.join(_log_dir, f"log_{_start_ts}.txt")
+        self._log_lock = threading.Lock()
+        with open(self._log_path, "w", encoding="utf-8") as _f:
+            _f.write(f"=== TCP Server Log (started {_start_ts}) ===\n")
+        print(f"[LOG] 로그 파일 생성: {self._log_path}")
 
         # 하드웨어(I2C) 동시 접근 방지를 위한 Lock (스레드 시작 전에 초기화)
         self.hw_lock = threading.Lock()
@@ -722,7 +734,21 @@ class DefaultRaspbotHandler(RaspbotCommandHandler):
             # 실제 명령 처리 시작
             return self._handle_locked(op, data)
 
+    def _log_command(self, op: str, data: Dict[str, Any]) -> None:
+        """수신된 명령을 타임스탬프와 함께 로그 파일에 기록합니다."""
+        ts  = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]  # ms 단위
+        line = f"[{ts}] op={op}  data={data}\n"
+        with self._log_lock:
+            try:
+                with open(self._log_path, "a", encoding="utf-8") as f:
+                    f.write(line)
+            except Exception as e:
+                print(f"[LOG] 기록 실패: {e}")
+
     def _handle_locked(self, op: str, data: Dict[str, Any]) -> Dict[str, Any]:
+
+        # ── 수신 명령 로그 기록 ──────────────────────────────────────────
+        self._log_command(op, data)
 
         #통신 확인
         if op == "ping":
